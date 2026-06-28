@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Local Screen Receiver</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: Arial, sans-serif;
+      }
+      body {
+        margin: 0;
+        background: #111;
+        color: #f5f5f5;
+        display: flex;
+        justify-content: center;
+        padding: 16px;
+      }
+      .panel {
+        width: min(1100px, 100%);
+        background: #1c1c1c;
+        border-radius: 12px;
+        padding: 16px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+      }
+      h1 {
+        margin-top: 0;
+        font-size: 1.2rem;
+      }
+      .meta {
+        color: #b8b8b8;
+        margin-bottom: 12px;
+        font-size: 0.95rem;
+      }
+      img {
+        width: 100%;
+        max-height: 75vh;
+        object-fit: contain;
+        border-radius: 8px;
+        background: #000;
+        display: block;
+      }
+      .empty {
+        padding: 32px;
+        border: 1px dashed #555;
+        border-radius: 8px;
+        text-align: center;
+        color: #aaa;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="panel">
+      <h1>Local Screen Receiver</h1>
+      <div id="meta" class="meta">Waiting for the extension to send a screenshot...</div>
+      <div id="imageWrap" class="empty">No capture yet.</div>
+    </div>
+
+    <script>
+      const meta = document.getElementById('meta');
+      const imageWrap = document.getElementById('imageWrap');
+      let currentImageUrl = null;
+
+      function getBaseUrl() {
+        const currentOrigin = window.location.origin;
+        return currentOrigin;
+      }
+
+      async function refresh() {
+        try {
+          const response = await fetch(`${getBaseUrl()}/latest.json?ts=${Date.now()}`, { cache: 'no-store' });
+          if (!response.ok) {
+            throw new Error(`Status ${response.status}`);
+          }
+
+          const data = await response.json();
+          if (!data || !data.timestamp) {
+            return;
+          }
+
+          const nextImageUrl = `${getBaseUrl()}/latest?ts=${Date.now()}`;
+          if (currentImageUrl !== nextImageUrl) {
+            currentImageUrl = nextImageUrl;
+            imageWrap.innerHTML = '<img id="captureImage" alt="Latest capture" />';
+          }
+
+          const imageElement = document.getElementById('captureImage');
+          if (imageElement) {
+            imageElement.src = nextImageUrl;
+          }
+
+          meta.textContent = `Last update: ${data.timestamp} | URL: ${data.url || 'n/a'} | Tab: ${data.tab_id || 'n/a'} | Archive: ${data.archive_name || 'n/a'}`;
+        } catch (error) {
+          meta.textContent = `Waiting for the extension... ${error.message}`;
+        }
+      }
+
+      setInterval(refresh, 1000);
+      refresh();
+    </script>
+  </body>
+</html>
