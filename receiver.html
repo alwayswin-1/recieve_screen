@@ -48,7 +48,38 @@
         text-align: center;
         color: #aaa;
       }
+      .locked {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        align-items: center;
+        justify-content: center;
+        min-height: 180px;
+      }
+      .locked input {
+        padding: 10px 12px;
+        border-radius: 8px;
+        border: 1px solid #555;
+        background: #222;
+        color: #fff;
+        width: min(260px, 100%);
+      }
+      .locked button {
+        padding: 10px 14px;
+        border: none;
+        border-radius: 8px;
+        background: #4f8cff;
+        color: white;
+        cursor: pointer;
+      }
+      .locked .error {
+        color: #ff7b7b;
+        font-size: 0.95rem;
+      }
       #captureImage {
+        display: none;
+      }
+      .hidden {
         display: none;
       }
     </style>
@@ -56,13 +87,26 @@
   <body>
     <div class="panel">
       <h1>Local Screen Receiver</h1>
-      <div id="meta" class="meta">Waiting for the extension to send a screenshot...</div>
-      <div id="imageWrap" class="empty">
-        <img id="captureImage" alt="Latest capture" />
+      <div id="unlockPanel" class="locked">
+        <input id="passwordInput" type="password" placeholder="Enter password" />
+        <button id="unlockButton" type="button">Unlock</button>
+        <div id="unlockError" class="error"></div>
+      </div>
+      <div id="viewer" class="hidden">
+        <div id="meta" class="meta">Waiting for the extension to send a screenshot...</div>
+        <div id="imageWrap" class="empty">
+          <img id="captureImage" alt="Latest capture" />
+        </div>
       </div>
     </div>
 
     <script>
+      const password = '92807002';
+      const unlockPanel = document.getElementById('unlockPanel');
+      const unlockButton = document.getElementById('unlockButton');
+      const passwordInput = document.getElementById('passwordInput');
+      const unlockError = document.getElementById('unlockError');
+      const viewer = document.getElementById('viewer');
       const meta = document.getElementById('meta');
       const imageWrap = document.getElementById('imageWrap');
       const imageElement = document.getElementById('captureImage');
@@ -75,6 +119,17 @@
       function showImage() {
         imageWrap.classList.remove('empty');
         imageElement.style.display = 'block';
+      }
+
+      function unlockViewer() {
+        if (passwordInput.value === password) {
+          unlockPanel.classList.add('hidden');
+          viewer.classList.remove('hidden');
+          unlockError.textContent = '';
+          pollOnce();
+        } else {
+          unlockError.textContent = 'Incorrect password';
+        }
       }
 
       async function pollOnce() {
@@ -104,11 +159,16 @@
             meta.textContent = `Showing the last available capture. ${error.message}`;
           }
         } finally {
-          setTimeout(pollOnce, 100);
+          setTimeout(pollOnce, 1000);
         }
       }
 
-      pollOnce();
+      unlockButton.addEventListener('click', unlockViewer);
+      passwordInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          unlockViewer();
+        }
+      });
     </script>
   </body>
 </html>
