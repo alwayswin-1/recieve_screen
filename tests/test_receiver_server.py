@@ -8,7 +8,7 @@ from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from receiver_server import decode_image_payload, is_valid_password
+from receiver_server import decode_image_payload, is_valid_password, should_require_password
 
 
 class PasswordTests(unittest.TestCase):
@@ -17,6 +17,13 @@ class PasswordTests(unittest.TestCase):
 
     def test_rejects_wrong_password(self):
         self.assertFalse(is_valid_password('wrong-password'))
+
+    def test_upload_does_not_require_password(self):
+        self.assertFalse(should_require_password('/upload', 'POST'))
+
+    def test_site_views_require_password(self):
+        self.assertTrue(should_require_password('/latest.json', 'GET'))
+        self.assertTrue(should_require_password('/receiver.html', 'GET'))
 
 
 class DecodeImagePayloadTests(unittest.TestCase):

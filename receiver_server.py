@@ -45,6 +45,14 @@ def is_valid_password(candidate):
     return str(candidate).strip() == PASSWORD
 
 
+def should_require_password(path, method):
+    if method.upper() != 'GET':
+        return False
+
+    normalized_path = urlparse(path).path
+    return normalized_path in ('/', '/receiver.html', '/monitor', '/monitor.html', '/latest', '/latest.json', '/device_image', '/health')
+
+
 def load_state():
     if not os.path.exists(state_file):
         return {}
@@ -207,6 +215,8 @@ class ReceiverHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlparse(self.path).path
         if path in ('/', '/receiver.html'):
+            if not self.require_password():
+                return
             self.serve_file('receiver.html')
         elif path == HEALTH_PATH:
             self.send_json(200, {'status': 'ok'})
@@ -240,9 +250,6 @@ class ReceiverHandler(BaseHTTPRequestHandler):
             if body.strip():
                 self.send_json(400, {'error': 'Invalid JSON'})
                 return
-
-        if not self.require_password(payload):
-            return
 
         image_bytes = decode_image_payload(payload)
         if image_bytes is None:
