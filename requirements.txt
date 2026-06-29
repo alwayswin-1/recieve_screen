@@ -1,1 +1,1 @@
-# No additional packages required for this project
+Pillow>=11.0.0

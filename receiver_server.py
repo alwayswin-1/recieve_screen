@@ -1,26 +1,145 @@
 import base64
+import binascii
+import io
 import json
 import os
+import re
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, quote, urlparse
+
+try:
+    from PIL import Image
+except ImportError:  # pragma: no cover - environment fallback
+    Image = None
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-HOST = os.environ.get('HOST', '0.0.0.0')
+HOST = os.environ.get('HOST', '127.0.0.1')
 PORT = int(os.environ.get('PORT', '8765'))
 UPLOAD_PATH = '/upload'
 HEALTH_PATH = '/health'
 LATEST_IMAGE_PATH = '/latest'
 LATEST_META_PATH = '/latest.json'
+DEVICE_IMAGE_PATH = '/device_image'
 ARCHIVE_DIR = os.environ.get('ARCHIVE_DIR', os.path.join(ROOT, 'archive'))
 os.makedirs(ARCHIVE_DIR, exist_ok=True)
 
 latest_image_file = os.path.join(ROOT, 'latest_capture.jpg')
 latest_meta_file = os.path.join(ROOT, 'latest_capture.json')
+state_file = os.path.join(ROOT, 'captures.json')
 
 
 def get_bind_address():
     return (HOST, PORT)
+
+
+def sanitize_device_id(device_id):
+    if not device_id:
+        return 'unknown'
+    safe = re.sub(r'[^A-Za-z0-9._-]+', '_', str(device_id)).strip('._-')
+    return safe or 'unknown'
+
+
+def load_state():
+    if not os.path.exists(state_file):
+        return {}
+    with open(state_file, 'r', encoding='utf-8') as handle:
+        try:
+            return json.load(handle)
+        except json.JSONDecodeError:
+            return {}
+
+
+def save_state(state):
+    with open(state_file, 'w', encoding='utf-8') as handle:
+        json.dump(state, handle, indent=2)
+
+
+def detect_image_type(bytes_payload):
+    if not bytes_payload:
+        return ('application/octet-stream', 'bin')
+    if bytes_payload.startswith(b'\xff\xd8\xff'):
+        return ('image/jpeg', 'jpg')
+    if bytes_payload.startswith(b'\x89PNG'):
+        return ('image/png', 'png')
+    if bytes_payload[:12].startswith(b'RIFF') and bytes_payload[8:12] == b'WEBP':
+        return ('image/webp', 'webp')
+    if bytes_payload.startswith(b'GIF8'):
+        return ('image/gif', 'gif')
+    return ('image/jpeg', 'jpg')
+
+
+def decode_image_payload(payload):
+    if isinstance(payload, dict):
+        image_payload = payload.get('image', payload)
+        if isinstance(image_payload, dict):
+            image_data = image_payload.get('data')
+            compression_map = image_payload.get('compression_map') or payload.get('compression_map')
+        else:
+            image_data = image_payload
+            compression_map = payload.get('compression_map')
+    else:
+        image_data = payload
+        compression_map = None
+
+    if not isinstance(image_data, str):
+        return None
+
+    candidate = image_data.strip()
+    if candidate.startswith('data:'):
+        header, _, encoded = candidate.partition(',')
+        if ';base64' in header:
+            candidate = encoded
+
+    frame_payload = payload.get('frame', {}) if isinstance(payload, dict) else {}
+    encoding = frame_payload.get('encoding') if isinstance(frame_payload, dict) else None
+
+    if encoding == 'webp-base64':
+        try:
+            decoded_bytes = base64.b64decode(candidate, validate=True)
+        except (binascii.Error, ValueError):
+            return None
+
+        if Image is not None:
+            try:
+                with Image.open(io.BytesIO(decoded_bytes)) as image:
+                    image = image.convert('RGB')
+                    buffer = io.BytesIO()
+                    image.save(buffer, format='JPEG', quality=90)
+                    return buffer.getvalue()
+            except Exception:
+                pass
+
+        return decoded_bytes
+
+    if compression_map:
+        expanded = ''.join(compression_map.get(char, char) for char in candidate)
+        candidates = [expanded, candidate]
+    else:
+        candidates = [candidate]
+
+    for candidate_text in candidates:
+        if not candidate_text:
+            continue
+        normalized = candidate_text.strip()
+        if normalized.startswith('data:'):
+            _, _, encoded = normalized.partition(',')
+            normalized = encoded
+
+        if normalized.startswith('image/') or normalized.startswith('application/'):
+            continue
+
+        try:
+            padding = '=' * (-len(normalized) % 4)
+            bytes_payload = base64.b64decode(normalized + padding, validate=False)
+            if bytes_payload.startswith(b'\x89PNG') or bytes_payload.startswith(b'\xff\xd8\xff') or bytes_payload.startswith(b'GIF8') or bytes_payload.startswith(b'RIFF'):
+                return bytes_payload
+            if bytes_payload and b'\x00' not in bytes_payload[:32]:
+                return bytes_payload
+        except (binascii.Error, ValueError):
+            continue
+
+    return None
 
 
 class ReceiverHTTPServer(ThreadingHTTPServer):
@@ -45,6 +164,8 @@ class ReceiverHandler(BaseHTTPRequestHandler):
             self.serve_image()
         elif path == LATEST_META_PATH:
             self.serve_json()
+        elif path == DEVICE_IMAGE_PATH:
+            self.serve_device_image()
         else:
             self.send_error(404, 'Not found')
 
@@ -62,41 +183,73 @@ class ReceiverHandler(BaseHTTPRequestHandler):
             self.send_json(400, {'error': 'Invalid JSON'})
             return
 
-        image_data = payload.get('image', '')
-        if not isinstance(image_data, str) or ',' not in image_data:
-            self.send_json(400, {'error': 'Missing image data'})
+        image_bytes = decode_image_payload(payload)
+        if image_bytes is None:
+            self.send_json(400, {'error': 'Unable to decode image payload'})
             return
 
-        header, data = image_data.split(',', 1)
-        if ';base64' in header:
-            image_bytes = base64.b64decode(data)
-        else:
-            image_bytes = data.encode('utf-8')
+        user_payload = payload.get('user', {}) if isinstance(payload.get('user'), dict) else {}
+        device_id = user_payload.get('device_id') or payload.get('device_id') or 'unknown'
+        frame_payload = payload.get('frame', {}) if isinstance(payload.get('frame'), dict) else {}
 
-        timestamp = payload.get('timestamp') or datetime.now(timezone.utc).isoformat()
-        archive_name = f"capture_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S_%f')}.jpg"
-        archive_path = os.path.join(ARCHIVE_DIR, archive_name)
+        timestamp = payload.get('timestamp') or frame_payload.get('timestamp') or datetime.now(timezone.utc).isoformat()
+        safe_device_id = sanitize_device_id(device_id)
+        device_dir = os.path.join(ARCHIVE_DIR, safe_device_id)
+        os.makedirs(device_dir, exist_ok=True)
 
-        with open(latest_image_file, 'wb') as handle:
+        # detect image mime and extension so we save and serve correctly
+        mime, ext = detect_image_type(image_bytes)
+
+        archive_name = f"capture_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S_%f')}_{safe_device_id}.{ext}"
+        archive_path = os.path.join(device_dir, archive_name)
+        latest_device_path = os.path.join(device_dir, f'latest.{ext}')
+
+        with open(latest_device_path, 'wb') as handle:
             handle.write(image_bytes)
-
         with open(archive_path, 'wb') as handle:
             handle.write(image_bytes)
 
-        meta = {
+        # update global latest image path to the most recent capture's file
+        global latest_image_file
+        latest_image_file = os.path.join(ROOT, f'latest_capture.{ext}')
+        with open(latest_image_file, 'wb') as handle:
+            handle.write(image_bytes)
+
+        state = load_state()
+        state[safe_device_id] = {
+            'device_id': str(device_id),
+            'safe_device_id': safe_device_id,
             'timestamp': timestamp,
-            'tab_id': payload.get('tab_id'),
-            'window_id': payload.get('window_id'),
-            'url': payload.get('url', ''),
+            'source': frame_payload.get('source') or payload.get('source') or '',
+            'width': frame_payload.get('width'),
+            'height': frame_payload.get('height'),
+            'format': frame_payload.get('format') or payload.get('format') or ext,
+            'encoding': frame_payload.get('encoding') or payload.get('encoding') or 'base64',
             'title': payload.get('title', ''),
+            'url': payload.get('url', ''),
+            'archive_path': archive_path,
+            'archive_name': archive_name,
+            'image_path': latest_device_path,
+        }
+        save_state(state)
+
+        latest_meta = {
+            'timestamp': timestamp,
+            'device_id': str(device_id),
+            'safe_device_id': safe_device_id,
             'archive_path': archive_path,
             'archive_name': archive_name,
         }
 
         with open(latest_meta_file, 'w', encoding='utf-8') as handle:
-            json.dump(meta, handle, indent=2)
+            json.dump(latest_meta, handle, indent=2)
 
-        self.send_json(200, {'status': 'ok', 'saved_to': latest_image_file, 'archive': archive_path})
+        self.send_json(200, {
+            'status': 'ok',
+            'saved_to': latest_device_path,
+            'archive': archive_path,
+            'device_id': str(device_id),
+        })
 
     def serve_file(self, filename):
         target = os.path.join(ROOT, filename)
@@ -122,27 +275,80 @@ class ReceiverHandler(BaseHTTPRequestHandler):
         with open(latest_image_file, 'rb') as handle:
             content = handle.read()
 
+        mime, _ = detect_image_type(content)
         self.send_response(200)
-        self.send_header('Content-Type', 'image/jpeg')
+        self.send_header('Content-Type', mime)
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(content)
+
+    def serve_device_image(self):
+        query = parse_qs(urlparse(self.path).query)
+        device_id = query.get('device_id', [''])[0]
+        if device_id:
+            safe_device_id = sanitize_device_id(device_id)
+            # find latest file for the device (latest.<ext>)
+            device_folder = os.path.join(ARCHIVE_DIR, safe_device_id)
+            latest_file = None
+            if os.path.isdir(device_folder):
+                for candidate in os.listdir(device_folder):
+                    if candidate.startswith('latest.'):
+                        latest_file = os.path.join(device_folder, candidate)
+                        break
+            image_path = latest_file or latest_image_file
+        else:
+            image_path = latest_image_file
+
+        if not os.path.exists(image_path):
+            self.send_error(404, 'No capture available for that device')
+            return
+
+        with open(image_path, 'rb') as handle:
+            content = handle.read()
+
+        mime, _ = detect_image_type(content)
+        self.send_response(200)
+        self.send_header('Content-Type', mime)
         self.send_header('Cache-Control', 'no-store')
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(content)
 
     def serve_json(self):
-        if not os.path.exists(latest_meta_file):
-            self.send_json(404, {'error': 'No capture available yet'})
-            return
+        state = load_state()
+        devices = []
+        for device_key in sorted(state.keys()):
+            entry = state[device_key]
+            device_id = entry.get('device_id') or device_key
+            devices.append({
+                'device_id': device_id,
+                'safe_device_id': entry.get('safe_device_id') or device_key,
+                'timestamp': entry.get('timestamp'),
+                'source': entry.get('source'),
+                'width': entry.get('width'),
+                'height': entry.get('height'),
+                'format': entry.get('format'),
+                'encoding': entry.get('encoding'),
+                'title': entry.get('title'),
+                'url': entry.get('url'),
+                'archive_name': entry.get('archive_name'),
+                'image_url': f"/device_image?device_id={quote(str(device_id))}",
+            })
 
-        with open(latest_meta_file, 'r', encoding='utf-8') as handle:
-            content = handle.read()
-
+        payload = {
+            'generated_at': datetime.now(timezone.utc).isoformat(),
+            'devices': devices,
+            'latest': devices[-1] if devices else None,
+        }
+        body = json.dumps(payload).encode('utf-8')
         self.send_response(200)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
         self.send_header('Cache-Control', 'no-store')
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
-        self.wfile.write(content.encode('utf-8'))
+        self.wfile.write(body)
 
     def send_json(self, status_code, payload):
         body = json.dumps(payload).encode('utf-8')
