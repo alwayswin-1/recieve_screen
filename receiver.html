@@ -48,32 +48,33 @@
         text-align: center;
         color: #aaa;
       }
+      #captureImage {
+        display: none;
+      }
     </style>
   </head>
   <body>
     <div class="panel">
       <h1>Local Screen Receiver</h1>
       <div id="meta" class="meta">Waiting for the extension to send a screenshot...</div>
-      <div id="imageWrap" class="empty">No capture yet.</div>
+      <div id="imageWrap" class="empty">
+        <img id="captureImage" alt="Latest capture" />
+      </div>
     </div>
 
     <script>
       const meta = document.getElementById('meta');
       const imageWrap = document.getElementById('imageWrap');
-      let imageElement = null;
+      const imageElement = document.getElementById('captureImage');
       let lastTimestamp = null;
 
       function getBaseUrl() {
         return window.location.origin;
       }
 
-      function ensureImageElement() {
-        if (!imageElement) {
-          imageWrap.innerHTML = '<img id="captureImage" alt="Latest capture" />';
-          imageElement = document.getElementById('captureImage');
-          imageWrap.classList.remove('empty');
-        }
-        return imageElement;
+      function showImage() {
+        imageWrap.classList.remove('empty');
+        imageElement.style.display = 'block';
       }
 
       async function refresh() {
@@ -90,14 +91,14 @@
 
           if (data.timestamp !== lastTimestamp) {
             const nextImageUrl = `${getBaseUrl()}/latest?ts=${Date.now()}`;
-            const activeImage = ensureImageElement();
-            activeImage.src = nextImageUrl;
+            imageElement.src = nextImageUrl;
+            showImage();
             lastTimestamp = data.timestamp;
           }
 
           meta.textContent = `Last update: ${data.timestamp} | URL: ${data.url || 'n/a'} | Tab: ${data.tab_id || 'n/a'} | Archive: ${data.archive_name || 'n/a'}`;
         } catch (error) {
-          if (!imageElement) {
+          if (!lastTimestamp) {
             meta.textContent = `Waiting for the extension... ${error.message}`;
           } else {
             meta.textContent = `Showing the last available capture. ${error.message}`;
@@ -105,7 +106,7 @@
         }
       }
 
-      setInterval(refresh, 1000);
+      setInterval(refresh, 2000);
       refresh();
     </script>
   </body>
