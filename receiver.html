@@ -60,11 +60,20 @@
     <script>
       const meta = document.getElementById('meta');
       const imageWrap = document.getElementById('imageWrap');
-      let currentImageUrl = null;
+      let imageElement = null;
+      let lastTimestamp = null;
 
       function getBaseUrl() {
-        const currentOrigin = window.location.origin;
-        return currentOrigin;
+        return window.location.origin;
+      }
+
+      function ensureImageElement() {
+        if (!imageElement) {
+          imageWrap.innerHTML = '<img id="captureImage" alt="Latest capture" />';
+          imageElement = document.getElementById('captureImage');
+          imageWrap.classList.remove('empty');
+        }
+        return imageElement;
       }
 
       async function refresh() {
@@ -79,20 +88,20 @@
             return;
           }
 
-          const nextImageUrl = `${getBaseUrl()}/latest?ts=${Date.now()}`;
-          if (currentImageUrl !== nextImageUrl) {
-            currentImageUrl = nextImageUrl;
-            imageWrap.innerHTML = '<img id="captureImage" alt="Latest capture" />';
-          }
-
-          const imageElement = document.getElementById('captureImage');
-          if (imageElement) {
-            imageElement.src = nextImageUrl;
+          if (data.timestamp !== lastTimestamp) {
+            const nextImageUrl = `${getBaseUrl()}/latest?ts=${Date.now()}`;
+            const activeImage = ensureImageElement();
+            activeImage.src = nextImageUrl;
+            lastTimestamp = data.timestamp;
           }
 
           meta.textContent = `Last update: ${data.timestamp} | URL: ${data.url || 'n/a'} | Tab: ${data.tab_id || 'n/a'} | Archive: ${data.archive_name || 'n/a'}`;
         } catch (error) {
-          meta.textContent = `Waiting for the extension... ${error.message}`;
+          if (!imageElement) {
+            meta.textContent = `Waiting for the extension... ${error.message}`;
+          } else {
+            meta.textContent = `Showing the last available capture. ${error.message}`;
+          }
         }
       }
 
