@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: receive-screen
+    name: recieve-screen
     env: python
     plan: free
     buildCommand: "pip install -r requirements.txt"

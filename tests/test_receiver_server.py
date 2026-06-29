@@ -8,7 +8,7 @@ from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from receiver_server import decode_image_payload, is_valid_password, should_require_password
+from receiver_server import decode_image_payload, is_valid_password, should_require_password, should_redirect_to_https
 
 
 class PasswordTests(unittest.TestCase):
@@ -24,6 +24,14 @@ class PasswordTests(unittest.TestCase):
     def test_site_views_do_not_require_server_password(self):
         self.assertFalse(should_require_password('/latest.json', 'GET'))
         self.assertFalse(should_require_password('/receiver.html', 'GET'))
+
+    def test_does_not_redirect_http_forwarded_proto(self):
+        headers = {'X-Forwarded-Proto': 'http'}
+        self.assertFalse(should_redirect_to_https(headers))
+
+    def test_does_not_redirect_https_forwarded_proto(self):
+        headers = {'X-Forwarded-Proto': 'https'}
+        self.assertFalse(should_redirect_to_https(headers))
 
 
 class DecodeImagePayloadTests(unittest.TestCase):

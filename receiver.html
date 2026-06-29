@@ -153,16 +153,32 @@
       }
 
       function queueImageLoad(img, src) {
+        if (!src) {
+          return;
+        }
         if (img.dataset.pendingSrc === src || img.dataset.currentSrc === src) {
           return;
         }
 
         img.dataset.pendingSrc = src;
         const loader = new Image();
+        loader.decoding = 'async';
+        loader.loading = 'eager';
+        loader.fetchPriority = 'high';
         loader.onload = () => {
+          if (img.dataset.pendingSrc !== src) {
+            return;
+          }
+
+          img.src = src;
+          img.dataset.currentSrc = src;
+          img.dataset.pendingSrc = '';
+          if (typeof img.decode === 'function') {
+            img.decode().catch(() => {});
+          }
+        };
+        loader.onerror = () => {
           if (img.dataset.pendingSrc === src) {
-            img.src = src;
-            img.dataset.currentSrc = src;
             img.dataset.pendingSrc = '';
           }
         };
@@ -260,10 +276,11 @@
       }
 
       let pollInProgress = false;
-      const POLL_INTERVAL_MS = 500;
+      const POLL_INTERVAL_MS = 200;
       const REQUIRED_PASSWORD = '92807002';
       let lastUpdateKey = '';
       let receiverPassword = sessionStorage.getItem('receiverPassword') || '';
+      let renderScheduled = false;
 
       function getPassword() {
         if (receiverPassword) {
@@ -285,6 +302,17 @@
         return devices
           .map((device) => `${device.device_id || device.safe_device_id || 'unknown'}:${device.timestamp || ''}`)
           .join('|');
+      }
+
+      function scheduleRender(devices) {
+        if (renderScheduled) {
+          return;
+        }
+        renderScheduled = true;
+        requestAnimationFrame(() => {
+          renderScheduled = false;
+          renderDevices(devices);
+        });
       }
 
       async function pollOnce() {
@@ -309,7 +337,7 @@
           if (updateKey !== lastUpdateKey) {
             lastUpdateKey = updateKey;
             lastPayload = data;
-            renderDevices(data.devices || []);
+            scheduleRender(data.devices || []);
           }
 
           if (data.devices?.length) {

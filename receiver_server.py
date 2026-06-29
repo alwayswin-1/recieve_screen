@@ -49,6 +49,10 @@ def should_require_password(path, method):
     return False
 
 
+def should_redirect_to_https(headers):
+    return False
+
+
 def load_state():
     if not os.path.exists(state_file):
         return {}
