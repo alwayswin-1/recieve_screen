@@ -261,6 +261,7 @@
 
       let pollInProgress = false;
       const POLL_INTERVAL_MS = 500;
+      const REQUIRED_PASSWORD = '92807002';
       let lastUpdateKey = '';
       let receiverPassword = sessionStorage.getItem('receiverPassword') || '';
 
@@ -268,13 +269,13 @@
         if (receiverPassword) {
           return receiverPassword;
         }
-        const enteredPassword = window.prompt('Enter the receiver password:', '');
-        if (!enteredPassword) {
-          return '';
+        const enteredPassword = window.prompt('Enter the project password:', '');
+        if (enteredPassword === REQUIRED_PASSWORD) {
+          receiverPassword = enteredPassword;
+          sessionStorage.setItem('receiverPassword', receiverPassword);
+          return receiverPassword;
         }
-        receiverPassword = enteredPassword;
-        sessionStorage.setItem('receiverPassword', receiverPassword);
-        return receiverPassword;
+        return '';
       }
 
       function buildUpdateKey(devices) {
@@ -298,10 +299,7 @@
             return;
           }
 
-          const response = await fetch(`/latest.json`, {
-            cache: 'no-store',
-            headers: { 'X-Receiver-Password': password },
-          });
+          const response = await fetch(`/latest.json`, { cache: 'no-store' });
           if (!response.ok) {
             throw new Error(`Status ${response.status}`);
           }

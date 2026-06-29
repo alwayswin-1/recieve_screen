@@ -21,9 +21,9 @@ class PasswordTests(unittest.TestCase):
     def test_upload_does_not_require_password(self):
         self.assertFalse(should_require_password('/upload', 'POST'))
 
-    def test_site_views_require_password(self):
-        self.assertTrue(should_require_password('/latest.json', 'GET'))
-        self.assertTrue(should_require_password('/receiver.html', 'GET'))
+    def test_site_views_do_not_require_server_password(self):
+        self.assertFalse(should_require_password('/latest.json', 'GET'))
+        self.assertFalse(should_require_password('/receiver.html', 'GET'))
 
 
 class DecodeImagePayloadTests(unittest.TestCase):
