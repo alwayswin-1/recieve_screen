@@ -104,7 +104,7 @@
             meta.textContent = `Showing the last available capture. ${error.message}`;
           }
         } finally {
-          setTimeout(pollOnce, 1000);
+          setTimeout(pollOnce, 100);
         }
       }
 
