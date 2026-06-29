@@ -22,6 +22,7 @@ LATEST_IMAGE_PATH = '/latest'
 LATEST_META_PATH = '/latest.json'
 DEVICE_IMAGE_PATH = '/device_image'
 ARCHIVE_DIR = os.environ.get('ARCHIVE_DIR', os.path.join(ROOT, 'archive'))
+PASSWORD = '92807002'
 os.makedirs(ARCHIVE_DIR, exist_ok=True)
 
 latest_image_file = os.path.join(ROOT, 'latest_capture.jpg')
@@ -38,6 +39,10 @@ def sanitize_device_id(device_id):
         return 'unknown'
     safe = re.sub(r'[^A-Za-z0-9._-]+', '_', str(device_id)).strip('._-')
     return safe or 'unknown'
+
+
+def is_valid_password(candidate):
+    return str(candidate).strip() == PASSWORD
 
 
 def load_state():
@@ -147,11 +152,56 @@ class ReceiverHTTPServer(ThreadingHTTPServer):
 
 
 class ReceiverHandler(BaseHTTPRequestHandler):
+    def get_password_from_request(self, payload=None):
+        parsed = urlparse(self.path)
+        query = parse_qs(parsed.query)
+
+        for key in ('password', 'pwd'):
+            values = query.get(key, [])
+            if values:
+                return values[0]
+
+        for header_name in ('X-Receiver-Password', 'X-Password', 'Authorization'):
+            header_value = self.headers.get(header_name)
+            if not header_value:
+                continue
+            if header_name == 'Authorization' and header_value.lower().startswith('bearer '):
+                return header_value.split(None, 1)[1]
+            if header_name == 'Authorization' and header_value.lower().startswith('basic '):
+                try:
+                    decoded = base64.b64decode(header_value.split(None, 1)[1]).decode('utf-8')
+                    if ':' in decoded:
+                        _, password = decoded.split(':', 1)
+                        return password
+                except Exception:
+                    return None
+            return header_value
+
+        if isinstance(payload, dict):
+            for key in ('password', 'pwd'):
+                if key in payload:
+                    return payload.get(key)
+
+        return None
+
+    def require_password(self, payload=None):
+        if is_valid_password(self.get_password_from_request(payload)):
+            return True
+        body = json.dumps({'error': 'Unauthorized', 'message': 'Incorrect password'}).encode('utf-8')
+        self.send_response(401)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(body)
+        return False
+
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, X-Receiver-Password, X-Password')
         self.end_headers()
 
     def do_GET(self):
@@ -161,10 +211,16 @@ class ReceiverHandler(BaseHTTPRequestHandler):
         elif path == HEALTH_PATH:
             self.send_json(200, {'status': 'ok'})
         elif path == LATEST_IMAGE_PATH:
+            if not self.require_password():
+                return
             self.serve_image()
         elif path == LATEST_META_PATH:
+            if not self.require_password():
+                return
             self.serve_json()
         elif path == DEVICE_IMAGE_PATH:
+            if not self.require_password():
+                return
             self.serve_device_image()
         else:
             self.send_error(404, 'Not found')
@@ -180,7 +236,12 @@ class ReceiverHandler(BaseHTTPRequestHandler):
         try:
             payload = json.loads(body)
         except json.JSONDecodeError:
-            self.send_json(400, {'error': 'Invalid JSON'})
+            payload = {}
+            if body.strip():
+                self.send_json(400, {'error': 'Invalid JSON'})
+                return
+
+        if not self.require_password(payload):
             return
 
         image_bytes = decode_image_payload(payload)

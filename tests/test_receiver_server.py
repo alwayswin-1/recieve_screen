@@ -8,7 +8,15 @@ from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from receiver_server import decode_image_payload
+from receiver_server import decode_image_payload, is_valid_password
+
+
+class PasswordTests(unittest.TestCase):
+    def test_allows_configured_password(self):
+        self.assertTrue(is_valid_password('92807002'))
+
+    def test_rejects_wrong_password(self):
+        self.assertFalse(is_valid_password('wrong-password'))
 
 
 class DecodeImagePayloadTests(unittest.TestCase):
