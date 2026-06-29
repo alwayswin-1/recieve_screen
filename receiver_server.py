@@ -14,7 +14,7 @@ except ImportError:  # pragma: no cover - environment fallback
     Image = None
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-HOST = os.environ.get('HOST', '127.0.0.1')
+HOST = os.environ.get('HOST', '0.0.0.0')
 PORT = int(os.environ.get('PORT', '8765'))
 UPLOAD_PATH = '/upload'
 HEALTH_PATH = '/health'
