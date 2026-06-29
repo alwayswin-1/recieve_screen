@@ -6,9 +6,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-HOST = os.environ.get('HOST', '127.0.0.1')
+HOST = os.environ.get('HOST', '0.0.0.0')
 PORT = int(os.environ.get('PORT', '8765'))
 UPLOAD_PATH = '/upload'
+HEALTH_PATH = '/health'
 LATEST_IMAGE_PATH = '/latest'
 LATEST_META_PATH = '/latest.json'
 ARCHIVE_DIR = os.environ.get('ARCHIVE_DIR', os.path.join(ROOT, 'archive'))
@@ -20,6 +21,10 @@ latest_meta_file = os.path.join(ROOT, 'latest_capture.json')
 
 def get_bind_address():
     return (HOST, PORT)
+
+
+class ReceiverHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = True
 
 
 class ReceiverHandler(BaseHTTPRequestHandler):
@@ -34,6 +39,8 @@ class ReceiverHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path in ('/', '/receiver.html'):
             self.serve_file('receiver.html')
+        elif path == HEALTH_PATH:
+            self.send_json(200, {'status': 'ok'})
         elif path == LATEST_IMAGE_PATH:
             self.serve_image()
         elif path == LATEST_META_PATH:
@@ -152,6 +159,6 @@ class ReceiverHandler(BaseHTTPRequestHandler):
 
 
 if __name__ == '__main__':
-    server = ThreadingHTTPServer(get_bind_address(), ReceiverHandler)
+    server = ReceiverHTTPServer(get_bind_address(), ReceiverHandler)
     print(f'Receiver server listening on http://{HOST}:{PORT}')
     server.serve_forever()
