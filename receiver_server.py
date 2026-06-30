@@ -25,8 +25,7 @@ PROJECT_DOWNLOAD_PATH = '/project'
 PROJECT_FILE = os.path.join(ROOT, 'uploaded_project.zip')
 DEVICE_IMAGE_PATH = '/device_image'
 ARCHIVE_DIR = os.environ.get('ARCHIVE_DIR', os.path.join(ROOT, 'archive'))
-PASSWORD = os.environ.get('PASSWORD', '92807002')
-AUTH_REALM = 'Screen Receiver'
+PASSWORD = '92807002'
 os.makedirs(ARCHIVE_DIR, exist_ok=True)
 
 latest_image_file = os.path.join(ROOT, 'latest_capture.jpg')
@@ -49,35 +48,13 @@ def is_valid_password(candidate):
     return str(candidate).strip() == PASSWORD
 
 
-def get_password_from_basic_auth(headers):
-    auth_header = headers.get('Authorization', '')
-    if not auth_header.startswith('Basic '):
-        return ''
-
-    encoded = auth_header.split(' ', 1)[1].strip()
-    try:
-        decoded = base64.b64decode(encoded).decode('utf-8', errors='ignore')
-    except (binascii.Error, ValueError):
-        return ''
-
-    if ':' not in decoded:
-        return ''
-    return decoded.split(':', 1)[1]
+def get_admin_password(path, headers):
+    query = parse_qs(urlparse(path).query)
+    return str(headers.get('X-Admin-Password') or query.get('password', [''])[0]).strip()
 
 
-def get_admin_password(headers):
-    password = get_password_from_basic_auth(headers)
-    if password:
-        return password.strip()
-    return str(headers.get('X-Admin-Password', '')).strip()
-
-
-def is_authorized_admin(headers):
-    return is_valid_password(get_admin_password(headers))
-
-
-def is_protected_path(path):
-    return path != PROJECT_DOWNLOAD_PATH
+def is_authorized_admin(path, headers):
+    return is_valid_password(get_admin_password(path, headers))
 
 
 def should_require_password(path, method):
@@ -204,10 +181,6 @@ class ReceiverHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
-        if is_protected_path(path) and not is_authorized_admin(self.headers):
-            self.send_unauthorized()
-            return
-
         if path in ('/', '/receiver.html'):
             self.serve_file('receiver.html')
         elif path == HEALTH_PATH:
@@ -227,11 +200,11 @@ class ReceiverHandler(BaseHTTPRequestHandler):
         content_length = int(self.headers.get('Content-Length', '0'))
         request_path = urlparse(self.path).path
 
-        if is_protected_path(request_path) and not is_authorized_admin(self.headers):
-            self.send_unauthorized()
-            return
-
         if request_path == PROJECT_UPLOAD_PATH:
+            if not is_authorized_admin(self.path, self.headers):
+                self.send_json(401, {'error': 'Unauthorized'})
+                return
+
             project_data = self.rfile.read(content_length)
             if not project_data:
                 self.send_json(400, {'error': 'Empty project upload'})
@@ -454,15 +427,6 @@ class ReceiverHandler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(body)
-
-    def send_unauthorized(self):
-        self.send_response(401)
-        self.send_header('WWW-Authenticate', f'Basic realm="{AUTH_REALM}"')
-        self.send_header('Content-Type', 'application/json; charset=utf-8')
-        self.send_header('Cache-Control', 'no-store')
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.end_headers()
-        self.wfile.write(json.dumps({'error': 'Unauthorized'}).encode('utf-8'))
 
     def log_message(self, format, *args):
         return
