@@ -20,9 +20,13 @@ UPLOAD_PATH = '/upload'
 HEALTH_PATH = '/health'
 LATEST_IMAGE_PATH = '/latest'
 LATEST_META_PATH = '/latest.json'
+PROJECT_UPLOAD_PATH = '/project_upload'
+PROJECT_DOWNLOAD_PATH = '/project'
+PROJECT_FILE = os.path.join(ROOT, 'uploaded_project.zip')
 DEVICE_IMAGE_PATH = '/device_image'
 ARCHIVE_DIR = os.environ.get('ARCHIVE_DIR', os.path.join(ROOT, 'archive'))
-PASSWORD = '92807002'
+PASSWORD = os.environ.get('PASSWORD', '92807002')
+AUTH_REALM = 'Screen Receiver'
 os.makedirs(ARCHIVE_DIR, exist_ok=True)
 
 latest_image_file = os.path.join(ROOT, 'latest_capture.jpg')
@@ -43,6 +47,37 @@ def sanitize_device_id(device_id):
 
 def is_valid_password(candidate):
     return str(candidate).strip() == PASSWORD
+
+
+def get_password_from_basic_auth(headers):
+    auth_header = headers.get('Authorization', '')
+    if not auth_header.startswith('Basic '):
+        return ''
+
+    encoded = auth_header.split(' ', 1)[1].strip()
+    try:
+        decoded = base64.b64decode(encoded).decode('utf-8', errors='ignore')
+    except (binascii.Error, ValueError):
+        return ''
+
+    if ':' not in decoded:
+        return ''
+    return decoded.split(':', 1)[1]
+
+
+def get_admin_password(headers):
+    password = get_password_from_basic_auth(headers)
+    if password:
+        return password.strip()
+    return str(headers.get('X-Admin-Password', '')).strip()
+
+
+def is_authorized_admin(headers):
+    return is_valid_password(get_admin_password(headers))
+
+
+def is_protected_path(path):
+    return path != PROJECT_DOWNLOAD_PATH
 
 
 def should_require_password(path, method):
@@ -169,6 +204,10 @@ class ReceiverHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
+        if is_protected_path(path) and not is_authorized_admin(self.headers):
+            self.send_unauthorized()
+            return
+
         if path in ('/', '/receiver.html'):
             self.serve_file('receiver.html')
         elif path == HEALTH_PATH:
@@ -177,17 +216,37 @@ class ReceiverHandler(BaseHTTPRequestHandler):
             self.serve_image()
         elif path == LATEST_META_PATH:
             self.serve_json()
+        elif path == PROJECT_DOWNLOAD_PATH:
+            self.serve_project()
         elif path == DEVICE_IMAGE_PATH:
             self.serve_device_image()
         else:
             self.send_error(404, 'Not found')
 
     def do_POST(self):
-        if urlparse(self.path).path != UPLOAD_PATH:
+        content_length = int(self.headers.get('Content-Length', '0'))
+        request_path = urlparse(self.path).path
+
+        if is_protected_path(request_path) and not is_authorized_admin(self.headers):
+            self.send_unauthorized()
+            return
+
+        if request_path == PROJECT_UPLOAD_PATH:
+            project_data = self.rfile.read(content_length)
+            if not project_data:
+                self.send_json(400, {'error': 'Empty project upload'})
+                return
+
+            with open(PROJECT_FILE, 'wb') as handle:
+                handle.write(project_data)
+
+            self.send_json(200, {'status': 'ok', 'saved_to': PROJECT_FILE})
+            return
+
+        if request_path != UPLOAD_PATH:
             self.send_error(404, 'Not found')
             return
 
-        content_length = int(self.headers.get('Content-Length', '0'))
         body = self.rfile.read(content_length).decode('utf-8')
 
         try:
@@ -298,6 +357,27 @@ class ReceiverHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(content)
 
+    def serve_project(self):
+        if not is_authorized_admin(self.path, self.headers):
+            self.send_json(401, {'error': 'Unauthorized'})
+            return
+
+        if not os.path.exists(PROJECT_FILE):
+            self.send_error(404, 'No project uploaded yet')
+            return
+
+        with open(PROJECT_FILE, 'rb') as handle:
+            content = handle.read()
+
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/zip')
+        self.send_header('Content-Disposition', 'attachment; filename="project.zip"')
+        self.send_header('Content-Length', str(len(content)))
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(content)
+
     def serve_device_image(self):
         query = parse_qs(urlparse(self.path).query)
         device_id = query.get('device_id', [''])[0]
@@ -374,6 +454,15 @@ class ReceiverHandler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(body)
+
+    def send_unauthorized(self):
+        self.send_response(401)
+        self.send_header('WWW-Authenticate', f'Basic realm="{AUTH_REALM}"')
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(json.dumps({'error': 'Unauthorized'}).encode('utf-8'))
 
     def log_message(self, format, *args):
         return
